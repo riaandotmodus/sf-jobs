@@ -1,0 +1,63 @@
+---
+- name: "Get workspace directory"
+  command: pwd
+  register: cwd
+  args:
+    chdir: "src/{{ zuul.project.canonical_hostname }}/"
+
+- name: "Set workspace"
+  set_fact:
+    workspace: "{{ cwd.stdout }}"
+    source: "{{ cwd.stdout }}/{{ zuul.project.name }}/{{ src_dir }}"
+
+- name: "Ensure pages-artifacts exists"
+  file:
+    path: "{{ ansible_user_dir }}/zuul-output/logs/pages"
+    state: directory
+
+- name: "Check site content type"
+  stat:
+    path: "{{ item.path }}"
+  loop:
+    - type: sphinx
+      path: "{{ source }}/conf.py"
+    - type: pelican
+      path: "{{ source }}/pelicanconf.py"
+  register: check
+
+- set_fact:
+    success_check: "{{ check.results|selectattr('stat.exists')|list() }}"
+
+- name: "Check wrong site content type detection"
+  fail:
+    msg: "It is confusing more than 1 site type has been detected."
+  when: success_check|length > 1
+
+- name: "Build sphinx site"
+  command: "sphinx-build -b html . {{ ansible_user_dir }}/zuul-output/logs/pages"
+  args:
+    chdir: "{{ source }}"
+  when:
+    - success_check
+    - success_check.0.item.type == "sphinx"
+
+- name: "Build pelican site"
+  command: "pelican content -o {{ ansible_user_dir }}/zuul-output/logs/pages"
+  args:
+    chdir: "{{ source }}"
+  when:
+    - success_check
+    - success_check.0.item.type == "pelican"
+
+- name: "Copy {{ source }} to {{ pages_build_dir }}/"
+  shell: "cp -Rf {{ source }}/* {{ ansible_user_dir }}/zuul-output/logs/pages"
+  when: not success_check
+
+- name: Define zuul artifacts
+  delegate_to: localhost
+  zuul_return:
+    data:
+      zuul:
+        artifacts:
+          - name: "Pages preview"
+            url: "pages/"
